@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 export default function Collapsible({
   title,
@@ -9,7 +9,10 @@ export default function Collapsible({
   subtitle?: string;
   children: React.ReactNode;
 }) {
-  const storageKey = `collapsible-${subtitle}-${title}`;
+  const storageKey = useMemo(
+    () => `collapsible-${subtitle}-${title}`,
+    [subtitle, title]
+  );
 
   const [open, setOpen] = useState(() => {
     const saved = localStorage?.getItem(storageKey);

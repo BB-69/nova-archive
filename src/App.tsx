@@ -1,5 +1,5 @@
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
-import { type JSX } from "react";
+import { createElement, useMemo, type JSX } from "react";
 import DebugBox from "./components/_DebugTools/DebugBox";
 import RouteNavigator from "./components/_DebugTools/RouteNavigator";
 import VariableInspector, {
@@ -9,22 +9,31 @@ import Collapsible from "./components/common/collapsible";
 import { ThemeSwitcher } from "./components/common/theme";
 
 import "./App.css";
-import _Test from "./pages/_Test";
-import HomePage from "./pages/HomePage";
-import BrowsePage from "./pages/BrowsePage";
+import { appRoutes } from ".";
 
 function App() {
   const navigate = useNavigate();
   const { setCurrentRoute } = useDebugVars();
 
-  const routes = new Map<string, JSX.Element | null>();
-  if (import.meta.env.DEV) {
-    routes.set("———DEV———", null);
-    routes.set("/testcss", <_Test />);
-  }
-  routes.set("———MAIN———", null);
-  routes.set("/home", <HomePage />);
-  routes.set("/browse", <BrowsePage />);
+  const routes = useMemo(() => {
+    const m = new Map<string, JSX.Element | null>();
+
+    appRoutes
+      .filter(({ devOnly }) => (import.meta.env.DEV && devOnly) || !devOnly)
+      .forEach(({ path, element }) => {
+        const jsx = element ? createElement(element) : null;
+        m.set(path, jsx);
+      });
+
+    return m;
+  }, []);
+  const routeList = useMemo(
+    () =>
+      Array.from(routes)
+        .filter(([, element]) => element)
+        .map(([path, element]) => ({ path, element })),
+    [routes]
+  );
 
   const defaultRoute = "/home";
   const title = "DEBUG";
@@ -55,13 +64,9 @@ function App() {
       )}
       <Routes>
         <Route path="/" element={<Navigate to={defaultRoute} replace />} />
-        {Array.from(routes)
-          .filter(([_, element]) => {
-            return element;
-          })
-          .map(([path, element]) => (
-            <Route path={path} element={element} />
-          ))}
+        {routeList.map(({ path, element }) => (
+          <Route key={path} path={path} element={element} />
+        ))}
       </Routes>
     </div>
   );
