@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import EntryCard from "./EntryCard";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useDebugValue } from "../_DebugTools/hooks/useDebugValue";
@@ -8,12 +8,19 @@ type Card = {
   title: string;
 };
 
+// Placeholder
+const cards: Card[] = Array.from({ length: 8 }).map((_, i) => ({
+  id: i,
+  title: `Option ${i + 1}`,
+}));
+
+const fullCircle = 2 * Math.PI;
+const anglePerCard = fullCircle / cards.length;
+
 const EntryCarousel = () => {
-  const [rotation, setRotation] = useState(0);
-  const [selectedIndex, setSelectedIndex] = useState(0);
   const [isSnapping, setIsSnapping] = useState(false);
-  const rotationRef = useRef<number>(rotation);
-  const momentumIdRef = useRef<number | null>(null);
+  const cardRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const rotationRef = useRef(0);
   const dragRef = useRef({
     active: false,
     startX: 0,
@@ -22,9 +29,20 @@ const EntryCarousel = () => {
     lastX: 0,
     velocity: 0,
   });
+  const momentumIdRef = useRef<number | null>(null);
+  const snapIdRef = useRef<number | null>(null);
+
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const getIndex = (dir?: number) =>
+    mod(
+      Math.round(
+        (rotationRef.current + (dir ?? 0) * anglePerCard) / anglePerCard
+      ),
+      cards.length
+    );
 
   {
-    useDebugValue("rotation", rotation.toFixed(2), "/home");
+    useDebugValue("rotation", rotationRef.current.toFixed(2), "/home");
     useDebugValue(
       "startRotation",
       dragRef.current.startRotation.toFixed(2),
@@ -33,30 +51,30 @@ const EntryCarousel = () => {
     useDebugValue("selectedIndex", selectedIndex, "/home");
   }
 
-  const fullCircle = 2 * Math.PI;
-
   const mod = (n: number, m: number) => ((n % m) + m) % m;
   const roundToMultiple = (n: number, d: number) => Math.round(n / d) * d;
 
-  const cards: Card[] = useMemo(
-    () =>
-      Array.from({ length: 8 }).map((_, i) => ({
-        id: i,
-        title: `Option ${i + 1}`,
-      })),
-    []
-  );
+  const updateTransforms = () => {
+    const radius = Math.min(window.innerWidth * 0.36, 400);
 
-  const anglePerCard = useMemo(
-    () => (2 * Math.PI) / cards.length,
-    [cards.length]
-  );
+    cardRefs.current.forEach((el, index) => {
+      if (!el) return;
 
-  useEffect(() => {
-    rotationRef.current = rotation;
-    const newIndex = mod(Math.round(rotation / anglePerCard), cards.length);
-    if (newIndex != selectedIndex) setSelectedIndex(newIndex);
-  }, [rotation]);
+      const cardAngle = index * anglePerCard - rotationRef.current;
+      const x = Math.sin(cardAngle) * radius;
+      const z = Math.cos(cardAngle) * radius;
+
+      const normalizedZ = (z + radius) / (radius * 2);
+      const scale = 0.7 + normalizedZ * 0.3;
+
+      el.style.transform = `translateX(${x}px) translateZ(${z}px) scale(${scale})`;
+    });
+  };
+
+  const animate = () => {
+    updateTransforms();
+    momentumIdRef.current = requestAnimationFrame(animate);
+  };
 
   const cancelMomentum = () => {
     dragRef.current.velocity = 0;
@@ -66,88 +84,110 @@ const EntryCarousel = () => {
     }
   };
 
-  const rotateLeft = () => snapToCard(-1);
-  const rotateRight = () => snapToCard(1);
-  const snapToCard = (dir: number) => {
-    cancelMomentum();
+  const rotateLeft = useCallback(() => snapToCard(-1), []);
+  const rotateRight = useCallback(() => snapToCard(1), []);
+  const snapToCard = useCallback(
+    (dir: number) => {
+      cancelMomentum();
+      setSelectedIndex(getIndex(dir));
 
-    const startRotation = rotationRef.current;
-    const targetRotation =
-      roundToMultiple(startRotation, anglePerCard) + dir * anglePerCard;
+      const startRotation = rotationRef.current;
+      const targetRotation =
+        roundToMultiple(startRotation, anglePerCard) + dir * anglePerCard;
 
-    let diff = (targetRotation - startRotation) % fullCircle;
+      let diff = (targetRotation - startRotation) % fullCircle;
 
-    if (diff > Math.PI) diff -= fullCircle;
-    else if (diff < -Math.PI) diff += fullCircle;
+      if (diff > Math.PI) diff -= fullCircle;
+      else if (diff < -Math.PI) diff += fullCircle;
 
-    const duration = 300; // ms
-    const startTime = performance.now();
+      const duration = 300; // ms
+      const startTime = performance.now();
 
-    const animateSnap = () => {
-      const now = performance.now();
-      const t = Math.min((now - startTime) / duration, 1); // 0 → 1
-      const easedT = t * (2 - t); // ease out
-      setRotation(() => {
+      const animateSnap = () => {
+        const now = performance.now();
+        const t = Math.min((now - startTime) / duration, 1); // 0 → 1
+        const easedT = t * (2 - t); // ease out
         rotationRef.current = startRotation + diff * easedT;
-        return rotationRef.current;
-      });
-      if (t < 1) requestAnimationFrame(animateSnap);
-      else setIsSnapping(false);
-    };
+        updateTransforms();
+        if (t < 1) snapIdRef.current = requestAnimationFrame(animateSnap);
+        else {
+          setIsSnapping(false);
+          snapIdRef.current = null;
+        }
+      };
 
-    setIsSnapping(true);
-    animateSnap();
-  };
+      setIsSnapping(true);
+      animateSnap();
+    },
+    [anglePerCard]
+  );
 
-  const handlePointerDown = (x: number) => {
-    if (isSnapping) return;
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (isSnapping) {
+      setIsSnapping(false);
+      if (snapIdRef.current) {
+        cancelAnimationFrame(snapIdRef.current);
+        snapIdRef.current = null;
+      }
+    }
 
     cancelMomentum();
+    setSelectedIndex(null);
     dragRef.current.active = true;
-    dragRef.current.startX = x;
-    dragRef.current.startRotation = rotation;
+    dragRef.current.startX = e.clientX;
+    dragRef.current.startRotation = rotationRef.current;
     dragRef.current.lastTime = performance.now();
+
+    e.currentTarget.setPointerCapture(e.pointerId);
   };
 
-  const handlePointerMove = (x: number) => {
+  const onPointerMove = (e: React.PointerEvent) => {
     if (!dragRef.current.active) return;
 
     const now = performance.now();
-    const delta = x - dragRef.current.startX;
+    const delta = e.clientX - dragRef.current.startX;
     const rotationDelta = (delta / 500) * Math.PI;
-    setRotation(dragRef.current.startRotation - rotationDelta);
+    rotationRef.current = dragRef.current.startRotation - rotationDelta;
+
+    if (momentumIdRef != null) {
+      updateTransforms();
+    }
 
     const dt = now - dragRef.current.lastTime; // in ms
-    const dx = x - dragRef.current.lastX;
+    const dx = e.clientX - dragRef.current.lastX;
     dragRef.current.velocity = dx / dt; // pixels per ms
     dragRef.current.lastTime = now;
-    dragRef.current.lastX = x;
+    dragRef.current.lastX = e.clientX;
   };
 
-  const handlePointerUp = () => {
+  const onPointerUp = (e: React.PointerEvent) => {
+    e.currentTarget.releasePointerCapture(e.pointerId);
+
     if (!dragRef.current.active) return;
     dragRef.current.active = false;
 
     let vel = dragRef.current.velocity * -0.15;
-    const friction = 0.95;
 
     const animateMomentum = () => {
-      if (Math.abs(vel) < 0.005) {
+      if (Math.abs(vel) < 0.01) {
         momentumIdRef.current = null;
         snapToCard(0);
         return;
       }
 
-      setRotation((prev) => {
-        rotationRef.current = prev + vel;
-        return rotationRef.current;
-      });
-      vel *= friction;
+      rotationRef.current += vel;
+      vel *= 0.94;
+      updateTransforms();
       momentumIdRef.current = requestAnimationFrame(animateMomentum);
     };
 
     animateMomentum();
   };
+
+  // Initialize
+  useEffect(() => {
+    snapToCard(0);
+  }, []);
 
   return (
     <div className="w-full max-w-[1200px] flex items-center justify-center m-6">
@@ -155,7 +195,7 @@ const EntryCarousel = () => {
         <div className="relative flex items-center justify-center">
           <button
             onClick={rotateLeft}
-            className="absolute left-0 z-50 bg-purple-600/75 hover:bg-white text-white hover:text-black p-4 rounded-full backdrop-blur-md shadow-lg transition-all"
+            className="absolute left-0 z-50 bg-purple-600/75 hover:bg-white text-white hover:text-black p-4 rounded-full backdrop-blur-md shadow-lg"
           >
             <ChevronLeft size={32} />
           </button>
@@ -166,13 +206,10 @@ const EntryCarousel = () => {
               perspective: "1200px",
               perspectiveOrigin: "center center",
             }}
-            onMouseDown={(e) => handlePointerDown(e.clientX)}
-            onMouseMove={(e) => handlePointerMove(e.clientX)}
-            onMouseUp={handlePointerUp}
-            onMouseLeave={handlePointerUp}
-            onTouchStart={(e) => handlePointerDown(e.touches[0].clientX)}
-            onTouchMove={(e) => handlePointerMove(e.touches[0].clientX)}
-            onTouchEnd={handlePointerUp}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            onPointerCancel={onPointerUp}
           >
             <div
               className="absolute inset-0 flex items-center justify-center"
@@ -181,13 +218,18 @@ const EntryCarousel = () => {
               }}
             >
               {cards.map((card, index) => (
-                <EntryCard
+                <div
+                  className="flex items-center justify-center"
                   key={card.id}
-                  title={card.title}
-                  position={index}
-                  total={cards.length}
-                  currentRotation={rotation}
-                />
+                  ref={(el) => {
+                    cardRefs.current[index] = el;
+                  }}
+                >
+                  <EntryCard
+                    title={card.title}
+                    isSelected={index === selectedIndex}
+                  />
+                </div>
               ))}
             </div>
           </div>
@@ -204,7 +246,7 @@ const EntryCarousel = () => {
           <p className="text-lg">
             Selected:{" "}
             <span className="font-bold text-white">
-              {cards[selectedIndex].title}
+              {selectedIndex != null ? cards[selectedIndex].title : "???"}
             </span>
           </p>
           <p className="text-sm mt-2">Click arrows, drag, or swipe to rotate</p>
@@ -221,7 +263,7 @@ const EntryCarousel = () => {
                   momentumIdRef.current = null;
                 }
                 dragRef.current.velocity = 0;
-                snapToCard(index - selectedIndex);
+                snapToCard(index - getIndex());
               }}
               className={`w-3 h-3 rounded-full transition-all ${
                 selectedIndex === index
